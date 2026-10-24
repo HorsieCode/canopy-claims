@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#1f2a1f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="manifest.json" />
+  <title>GeoSweeper</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="hud">
+    <div class="stat"><span class="label">Score</span><span id="score">0</span></div>
+    <div class="stat"><span class="label">Cleared</span><span id="cleared">0</span></div>
+    <div class="stat"><span class="label">Lives</span><span id="lives"></span></div>
+    <div class="stat small"><span id="gps">GPS: waiting…</span></div>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="dpad" class="hidden">
+    <button data-dir="up">▲</button>
+    <button data-dir="left">◀</button>
+    <button data-dir="right">▶</button>
+    <button data-dir="down">▼</button>
+  </div>
+
+  <div id="controls">
+    <button id="modeBtn" class="mode-reveal">⛏ Reveal</button>
+    <button id="centerBtn" title="Center on me">◎</button>
+    <button id="simBtn" title="Simulated walking">🚶 Sim</button>
+    <button id="menuBtn" title="Menu">☰</button>
+  </div>
+
+  <div id="menu" class="hidden">
+    <h2>GeoSweeper</h2>
+    <p>Minesweeper on the real world. Walk to a tile to dig it up.</p>
+    <ul>
+      <li>You can only dig the tile you're standing on or one right next to it (highlighted in yellow).</li>
+      <li>Tap a tile to dig. Long-press, right-click, or switch to 🚩 mode to place a flag.</li>
+      <li>Tap a number whose mines are all flagged to dig its neighbours at once.</li>
+      <li>Hitting a mine costs a life and 50 points. You get a life back every 2 minutes.</li>
+      <li>Every player gets the same minefield, so you can compare scores.</li>
+      <li>Sim mode lets you walk with the arrow keys / WASD or the on-screen pad.</li>
+    </ul>
+    <button id="resetBtn" class="danger">Reset my progress</button>
+    <button id="closeMenuBtn">Close</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
