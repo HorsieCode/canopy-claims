@@ -1,9 +1,9 @@
 {
-  "name": "GeoSweeper",
-  "short_name": "GeoSweeper",
+  "name": "GeoGrove",
+  "short_name": "GeoGrove",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#1f2a1f",
-  "theme_color": "#1f2a1f",
+  "background_color": "#14201a",
+  "theme_color": "#14201a",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

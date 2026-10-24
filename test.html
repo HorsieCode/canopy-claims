@@ -1,0 +1,47 @@
+<!doctype html><meta charset="utf-8"><title>economy tests</title>
+<pre id="out"></pre>
+<script src="economy.js"></script>
+<script>
+const E = Economy, C = E.CONFIG, MIN = 60000, H = 60 * MIN;
+const out = []; let fails = 0;
+const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
+function check(name, cond) { out.push((cond ? 'PASS ' : 'FAIL ') + name); if (!cond) fails++; }
+
+// Rarity table
+const counts = [0, 0, 0, 0];
+for (let r = 1; r <= 100; r++) counts[E.speciesForRoll(r)]++;
+check('roll table 50/35/14/1', counts.join() === '50,35,14,1');
+
+const oak = { s: 0, h0: 100, tw: 0 };
+check('bloom at start', E.hydrationState(oak, 0) === 'bloom');
+check('bloom rate 10*2.5', E.sapRate(oak, 0, 1) === 25);
+check('optimal after hold', E.hydrationState(oak, C.BLOOM_HOLD_MS + 1) === 'optimal');
+check('withered after drain', E.hydrationState(oak, C.BLOOM_HOLD_MS + C.DRAIN_FULL_MS + 1) === 'withered');
+check('withered rate 10*0.1', near(E.sapRate(oak, 0, C.BLOOM_HOLD_MS + C.DRAIN_FULL_MS + 1), 1));
+check('fertilizer 20x', E.sapRate(oak, 10, 1) === 500);
+check('half drained = 50%', near(E.hydrationAt(oak, C.BLOOM_HOLD_MS + C.DRAIN_FULL_MS / 2), 50));
+
+// Exact integration across bloom (1h@25) + 24h optimal (@10) + 1h withered (@1)
+const T = C.BLOOM_HOLD_MS + C.DRAIN_FULL_MS + H;
+const expected = 60 * 25 + 24 * 60 * 10 + 60 * 1;
+check('sapBetween full lifecycle = ' + expected, near(E.sapBetween(oak, 0, 0, T), expected));
+// Split integration equals single integration
+let split = 0; for (let t = 0; t < T; t += 7 * MIN) split += E.sapBetween(oak, 0, t, Math.min(T, t + 7 * MIN));
+check('split integration consistent', near(split, expected, 1e-6));
+// Boost for first 30 min of bloom
+check('boost window', near(E.sapBetween(oak, 30 * MIN, 0, H), 30 * 500 + 30 * 25));
+
+// Watering
+const dry = { s: 0, h0: 100, tw: 0 };
+const t = C.BLOOM_HOLD_MS + C.DRAIN_FULL_MS / 2; // 50%
+check('cost to full = 100 HE', near(E.waterCostToFull(dry, t), 100));
+let w = E.water(dry, t, 1000);
+check('water full -> bloom', w.tree.h0 === 100 && E.hydrationState(w.tree, t + 1) === 'bloom' && near(w.cost, 100));
+w = E.water(dry, t, 40);
+check('partial water +20%', near(w.tree.h0, 70) && near(w.cost, 40) && E.hydrationState(w.tree, t + 1) === 'optimal');
+check('no water during bloom', E.water(oak, 1, 1000).cost === 0);
+check('first tree free', E.plantCost(0) === 0 && E.plantCost(1) === C.PLANT_COST_HE);
+
+out.push(fails ? `\n${fails} FAILED` : '\nALL PASSED');
+document.getElementById('out').textContent = out.join('\n');
+</script>

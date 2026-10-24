@@ -1,62 +1,61 @@
 (() => {
   'use strict';
 
-  // ---- Config ----
-  const CELL = 40;               // tile size in Web-Mercator meters (~28 m on the ground at 45° latitude)
-  const DENSITY = 0.14;          // chance a tile is a mine
-  const SEED = 0x5eed1234;       // same seed = same minefield for every player
-  const REACH = 1;               // tiles away from the player that can be dug
-  const MAX_LIVES = 3;
-  const LIFE_REGEN_MS = 2 * 60 * 1000;
-  const MINE_PENALTY = 50;
-  const FLOOD_LIMIT = 3000;
-  const SIM_STEP_M = 8;
+  const E = window.Economy;
+  const C = E.CONFIG;
+  const SPECIES = E.SPECIES;
+
+  // ---- Map / movement config ----
+  const CELL = 40;                 // plot size in Web-Mercator meters (~28 m on the ground at 45° latitude)
+  const REACH = 1;                 // plots away from the player you can plant / water
   const MIN_GAME_ZOOM = 15;
-  const DEFAULT_POS = [40.7812, -73.9665]; // Central Park, used when GPS is unavailable
-  const STORAGE_KEY = 'geosweeper:v1';
+  const SIM_STEP_M = 8;
+  const GPS_MAX_ACCURACY_M = 30;   // ignore fixes worse than this for HE
+  const GPS_MIN_STEP_M = 8;        // ignore jitter smaller than this
+  const GPS_MAX_SPEED_MPS = 7;     // ~25 km/h; faster = vehicle, no HE
+  const DEFAULT_POS = [40.7812, -73.9665];
+  const STORAGE_KEY = 'geogrove:v1';
 
   const SM = L.Projection.SphericalMercator;
   const WORLD = 2 * Math.PI * SM.R;
-  const NUM_COLORS = ['', '#1976d2', '#388e3c', '#d32f2f', '#7b1fa2', '#ff8f00', '#0097a7', '#424242', '#9e9e9e'];
-
-  // ---- Deterministic minefield ----
-  function hash(i, j) {
-    let h = Math.imul(i | 0, 0x27d4eb2d) ^ Math.imul(j | 0, 0x165667b1) ^ SEED;
-    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-    h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-  }
-  const isMine = (i, j) => hash(i, j) < DENSITY;
-  function neighbors(i, j) {
-    const out = [];
-    for (let di = -1; di <= 1; di++)
-      for (let dj = -1; dj <= 1; dj++)
-        if (di || dj) out.push([i + di, j + dj]);
-    return out;
-  }
-  const mineCount = (i, j) => neighbors(i, j).reduce((n, [a, b]) => n + (isMine(a, b) ? 1 : 0), 0);
   const key = (i, j) => i + ',' + j;
-
   function cellOf(latlng) {
     const p = SM.project(L.latLng(latlng));
     return [Math.floor(p.x / CELL), Math.floor(p.y / CELL)];
   }
 
-  // ---- Persistent state ----
-  // cells: key -> 'r' (revealed), 'f' (flagged), 'x' (exploded mine)
+  // ---- State ----
+  const freshState = () => ({
+    he: 0, metersWalked: 0, sap: 0, lastTick: Date.now(), boostUntil: 0,
+    planted: 0, trees: {}, simPos: null, timeOffset: 0,
+  });
   let state = load();
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (s && s.cells) return s;
+      if (s && s.trees) return Object.assign(freshState(), s);
     } catch (e) { /* ignore */ }
-    return { cells: {}, score: 0, lives: MAX_LIVES, livesAt: Date.now(), simPos: null };
+    return freshState();
   }
+  const now = () => Date.now() + (state.timeOffset || 0);
   let saveTimer = null;
   function save() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(state)), 300);
+  }
+
+  // Bank all Sap produced since the last tick. Call before anything that changes rates.
+  function settle() {
+    const t = now();
+    for (const k in state.trees) state.sap += E.sapBetween(state.trees[k], state.boostUntil, state.lastTick, t);
+    state.lastTick = t;
+  }
+  const totalRate = (t) => Object.values(state.trees).reduce((r, tr) => r + E.sapRate(tr, state.boostUntil, t), 0);
+
+  function addMeters(m) {
+    state.metersWalked += m;
+    state.he += m * C.HE_PER_METER;
+    save();
   }
 
   // ---- Map ----
@@ -80,7 +79,6 @@
   const playerIcon = L.divIcon({ className: '', html: '<div class="player-dot"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
   const playerMarker = L.marker(DEFAULT_POS, { icon: playerIcon, interactive: false, zIndexOffset: 1000 });
   const accuracyCircle = L.circle(DEFAULT_POS, { radius: 0, color: '#2f8cff', weight: 1, fillOpacity: 0.08, interactive: false });
-
   const playerPos = () => (simMode ? simPos : gpsPos);
 
   function updatePlayer() {
@@ -96,31 +94,39 @@
     if (!playerCell || c[0] !== playerCell[0] || c[1] !== playerCell[1]) {
       playerCell = c;
       redrawAll();
+      updateSheet();
     }
   }
+  const inReach = (i, j) => playerCell && Math.max(Math.abs(i - playerCell[0]), Math.abs(j - playerCell[1])) <= REACH;
 
-  function inReach(i, j) {
-    return playerCell && Math.max(Math.abs(i - playerCell[0]), Math.abs(j - playerCell[1])) <= REACH;
-  }
-
-  // ---- GPS ----
+  // ---- GPS -> HE ----
   const gpsEl = document.getElementById('gps');
+  let anchor = null, anchorT = 0;
+  function onGpsFix(lat, lng, acc, t) {
+    if (acc > GPS_MAX_ACCURACY_M) return;
+    if (!anchor) { anchor = [lat, lng]; anchorT = t; return; }
+    const d = map.distance(anchor, [lat, lng]);
+    if (d < Math.max(GPS_MIN_STEP_M, acc * 0.5)) return;
+    const speed = d / Math.max(1, (t - anchorT) / 1000);
+    if (speed <= GPS_MAX_SPEED_MPS) addMeters(d);
+    else toast('Moving too fast, no HE in vehicles');
+    anchor = [lat, lng];
+    anchorT = t;
+  }
   if ('geolocation' in navigator) {
     navigator.geolocation.watchPosition(
       (p) => {
         gpsPos = [p.coords.latitude, p.coords.longitude];
         gpsAccuracy = p.coords.accuracy;
         gpsEl.textContent = `GPS ±${Math.round(gpsAccuracy)} m`;
-        gpsEl.classList.toggle('warn', gpsAccuracy > 25);
+        gpsEl.classList.toggle('warn', gpsAccuracy > GPS_MAX_ACCURACY_M);
+        onGpsFix(gpsPos[0], gpsPos[1], gpsAccuracy, p.timestamp || Date.now());
         if (!simMode) updatePlayer();
       },
-      (err) => {
+      () => {
         gpsEl.textContent = 'GPS unavailable';
         gpsEl.classList.add('warn');
-        if (!gpsPos && !simMode) {
-          toast('No GPS, switching to Sim mode');
-          setSim(true);
-        }
+        if (!gpsPos && !simMode) { toast('No GPS, switching to Sim mode'); setSim(true); }
       },
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
     );
@@ -129,10 +135,9 @@
     setTimeout(() => setSim(true), 0);
   }
 
-  // ---- Rendering (canvas grid layer) ----
+  // ---- Rendering ----
   const liveTiles = new Set();
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
   const GameLayer = L.GridLayer.extend({
     createTile(coords) {
       const tile = document.createElement('canvas');
@@ -148,7 +153,6 @@
   const gameLayer = new GameLayer({ minZoom: MIN_GAME_ZOOM, maxZoom: 20, updateWhenZooming: false });
   gameLayer.on('tileunload', (e) => liveTiles.delete(e.tile));
   gameLayer.addTo(map);
-
   function redrawAll() { liveTiles.forEach(drawTile); }
 
   function drawTile(tile) {
@@ -159,53 +163,29 @@
 
     const scale = 256 * Math.pow(2, z);
     const mPerPx = WORLD / scale;
-    const mx0 = (x * 256 / scale - 0.5) * WORLD;   // left edge (mercator x)
-    const my0 = (0.5 - y * 256 / scale) * WORLD;   // top edge  (mercator y)
+    const mx0 = (x * 256 / scale - 0.5) * WORLD;
+    const my0 = (0.5 - y * 256 / scale) * WORLD;
     const span = 256 * mPerPx;
     const i0 = Math.floor(mx0 / CELL), i1 = Math.floor((mx0 + span) / CELL);
     const j0 = Math.floor((my0 - span) / CELL), j1 = Math.floor(my0 / CELL);
     const w = CELL / mPerPx;
-    const showText = w >= 12;
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `bold ${Math.round(w * 0.6)}px system-ui, sans-serif`;
+    const t = now();
 
     for (let i = i0; i <= i1; i++) {
       for (let j = j0; j <= j1; j++) {
         const px = (i * CELL - mx0) / mPerPx;
         const py = (my0 - (j + 1) * CELL) / mPerPx;
-        const s = state.cells[key(i, j)];
+        const tree = state.trees[key(i, j)];
         const reach = inReach(i, j);
-        const cx = px + w / 2, cy = py + w / 2;
 
-        if (s === 'r') {
-          ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        if (tree) {
+          ctx.fillStyle = 'rgba(10,30,20,0.45)';
           ctx.fillRect(px, py, w, w);
-          const n = mineCount(i, j);
-          if (n && showText) {
-            ctx.fillStyle = 'rgba(255,255,255,0.85)';
-            ctx.beginPath(); ctx.arc(cx, cy, w * 0.36, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = NUM_COLORS[n];
-            ctx.fillText(String(n), cx, cy + 1);
-          }
-        } else if (s === 'x') {
-          ctx.fillStyle = 'rgba(220,30,20,0.75)';
+        } else if (reach) {
+          ctx.fillStyle = 'rgba(255,215,64,0.14)';
           ctx.fillRect(px, py, w, w);
-          if (showText) drawMine(ctx, cx, cy, w);
-        } else {
-          ctx.fillStyle = reach ? 'rgba(95,150,70,0.62)' : 'rgba(45,85,45,0.62)';
-          ctx.fillRect(px, py, w, w);
-          if (w >= 8) {
-            ctx.fillStyle = 'rgba(255,255,255,0.12)';
-            ctx.fillRect(px, py, w, Math.max(1, w * 0.08));
-            ctx.fillStyle = 'rgba(0,0,0,0.18)';
-            ctx.fillRect(px, py + w - Math.max(1, w * 0.08), w, Math.max(1, w * 0.08));
-          }
-          if (s === 'f' && showText) drawFlag(ctx, cx, cy, w);
         }
-
-        ctx.strokeStyle = 'rgba(0,0,0,0.30)';
+        ctx.strokeStyle = 'rgba(20,40,30,0.28)';
         ctx.lineWidth = 1;
         ctx.strokeRect(px + 0.5, py + 0.5, w, w);
         if (reach) {
@@ -213,169 +193,311 @@
           ctx.lineWidth = 2;
           ctx.strokeRect(px + 1.5, py + 1.5, w - 3, w - 3);
         }
+        if (tree) {
+          const st = E.hydrationState(tree, t);
+          if (w >= 10) {
+            drawTree(ctx, px + w / 2, py + w * 0.46, w * 0.9, SPECIES[tree.s], st);
+            drawHydrationBar(ctx, px, py, w, E.hydrationAt(tree, t), st);
+          } else {
+            ctx.fillStyle = st === 'withered' ? '#8a7a5a' : SPECIES[tree.s].color;
+            ctx.beginPath(); ctx.arc(px + w / 2, py + w / 2, Math.max(2, w * 0.35), 0, Math.PI * 2); ctx.fill();
+          }
+        }
       }
     }
   }
 
-  function drawFlag(ctx, cx, cy, w) {
-    const h = w * 0.55;
-    ctx.fillStyle = '#222';
-    ctx.fillRect(cx - w * 0.12, cy - h / 2, Math.max(1.5, w * 0.06), h);
-    ctx.fillStyle = '#e53935';
-    ctx.beginPath();
-    ctx.moveTo(cx - w * 0.08, cy - h / 2);
-    ctx.lineTo(cx + w * 0.25, cy - h / 4);
-    ctx.lineTo(cx - w * 0.08, cy);
-    ctx.fill();
+  function drawHydrationBar(ctx, px, py, w, h, st) {
+    const bx = px + w * 0.15, by = py + w * 0.86, bw = w * 0.7, bh = Math.max(2, w * 0.07);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = st === 'bloom' ? '#b6fff0' : st === 'withered' ? '#a0522d' : '#4aa8ff';
+    ctx.fillRect(bx, by, st === 'withered' ? bw : bw * (h / 100), bh);
   }
 
-  function drawMine(ctx, cx, cy, w) {
-    const r = w * 0.22;
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = Math.max(1.5, w * 0.06);
-    for (let a = 0; a < 4; a++) {
-      const t = (a * Math.PI) / 4;
-      ctx.beginPath();
-      ctx.moveTo(cx - Math.cos(t) * r * 1.5, cy - Math.sin(t) * r * 1.5);
-      ctx.lineTo(cx + Math.cos(t) * r * 1.5, cy + Math.sin(t) * r * 1.5);
-      ctx.stroke();
+  // Draws a tree centred on (cx, cy) inside a box of size w.
+  function drawTree(ctx, cx, cy, w, sp, st) {
+    const withered = st === 'withered';
+    const color = withered ? '#8a7a5a' : sp.color;
+    ctx.save();
+    ctx.fillStyle = '#5a3d22';
+    ctx.fillRect(cx - w * 0.05, cy + w * 0.08, w * 0.1, w * 0.3);
+    if (!withered && sp.glow) {
+      ctx.shadowColor = sp.glow;
+      ctx.shadowBlur = w * (st === 'bloom' ? 0.7 : 0.35);
+    } else if (!withered && st === 'bloom') {
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = w * 0.4;
     }
-    ctx.fillStyle = '#111';
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(cx - r * 0.35, cy - r * 0.35, r * 0.25, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // ---- Game logic ----
-  let flagMode = false;
-
-  function regenLives() {
-    if (state.lives >= MAX_LIVES) { state.livesAt = Date.now(); return; }
-    const gained = Math.floor((Date.now() - state.livesAt) / LIFE_REGEN_MS);
-    if (gained > 0) {
-      state.lives = Math.min(MAX_LIVES, state.lives + gained);
-      state.livesAt += gained * LIFE_REGEN_MS;
-      save();
-    }
-  }
-
-  function dig(i, j) {
-    const k = key(i, j);
-    if (state.cells[k]) return;
-    if (isMine(i, j)) {
-      if (state.lives >= MAX_LIVES) state.livesAt = Date.now();
-      state.cells[k] = 'x';
-      state.lives -= 1;
-      state.score -= MINE_PENALTY;
-      boom();
-      return;
-    }
-    // Flood-fill open area
-    const queue = [[i, j]];
-    let opened = 0;
-    while (queue.length && opened < FLOOD_LIMIT) {
-      const [a, b] = queue.pop();
-      const kk = key(a, b);
-      if (state.cells[kk] || isMine(a, b)) continue;
-      state.cells[kk] = 'r';
-      opened++;
-      const n = mineCount(a, b);
-      state.score += 1 + n;
-      if (n === 0) for (const nb of neighbors(a, b)) if (!state.cells[key(nb[0], nb[1])]) queue.push(nb);
-    }
-  }
-
-  function onTap(latlng, forceFlag) {
-    if (map.getZoom() < MIN_GAME_ZOOM) return;
-    const [i, j] = cellOf(latlng);
-    const s = state.cells[key(i, j)];
-    if (!playerPos()) return toast('Waiting for your location…');
-    if (!inReach(i, j)) return toast('Too far, walk closer');
-
-    if (forceFlag || flagMode) {
-      if (s === 'f') delete state.cells[key(i, j)];
-      else if (!s) state.cells[key(i, j)] = 'f';
-      else return;
-      vibrate(15);
+    if (sp.id === 'ironwood' && !withered) {
+      const g = ctx.createLinearGradient(cx - w * 0.3, cy - w * 0.4, cx + w * 0.3, cy + w * 0.2);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.45, '#c9d1d9'); g.addColorStop(1, '#6b7580');
+      ctx.fillStyle = g;
     } else {
-      regenLives();
-      if (state.lives <= 0) return toast('Out of lives, recharging…');
-      if (s === 'f') return toast('Flagged. Switch to 🚩 to remove');
-      if (s === 'r') {
-        // Chord: number tile with all its mines flagged digs the rest
-        const n = mineCount(i, j);
-        const nbs = neighbors(i, j);
-        const flags = nbs.filter(([a, b]) => ['f', 'x'].includes(state.cells[key(a, b)])).length;
-        if (!n || flags !== n) return;
-        for (const [a, b] of nbs) if (!state.cells[key(a, b)] && state.lives > 0) dig(a, b);
-      } else {
-        dig(i, j);
+      ctx.fillStyle = color;
+    }
+    ctx.beginPath();
+    switch (sp.shape) {
+      case 'oak':
+        ctx.arc(cx, cy - w * 0.1, w * 0.26, 0, Math.PI * 2);
+        ctx.arc(cx - w * 0.17, cy, w * 0.17, 0, Math.PI * 2);
+        ctx.arc(cx + w * 0.17, cy, w * 0.17, 0, Math.PI * 2);
+        break;
+      case 'conifer':
+        for (let k = 0; k < 3; k++) {
+          const top = cy - w * 0.42 + k * w * 0.14, base = top + w * 0.26, half = w * (0.14 + k * 0.06);
+          ctx.moveTo(cx, top); ctx.lineTo(cx - half, base); ctx.lineTo(cx + half, base); ctx.closePath();
+        }
+        break;
+      case 'willow':
+        ctx.arc(cx, cy - w * 0.04, w * 0.28, Math.PI, 0);
+        ctx.closePath();
+        break;
+      case 'cypress':
+        ctx.ellipse(cx, cy - w * 0.12, w * 0.13, w * 0.32, 0, 0, Math.PI * 2);
+        break;
+    }
+    ctx.fill();
+    if (sp.shape === 'willow') {
+      ctx.strokeStyle = ctx.fillStyle;
+      ctx.lineWidth = Math.max(1, w * 0.035);
+      for (let k = -3; k <= 3; k++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + k * w * 0.08, cy - w * 0.04);
+        ctx.quadraticCurveTo(cx + k * w * 0.09, cy + w * 0.12, cx + k * w * 0.075, cy + w * (0.2 - Math.abs(k) * 0.03));
+        ctx.stroke();
       }
     }
+    ctx.restore();
+    if (st === 'bloom') {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      for (const [dx, dy] of [[-0.3, -0.32], [0.32, -0.2], [-0.34, 0.08], [0.28, 0.12], [0.02, -0.46]]) {
+        ctx.beginPath(); ctx.arc(cx + dx * w, cy + dy * w, Math.max(0.8, w * 0.025), 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+
+  // ---- Bottom sheet ----
+  const sheet = document.getElementById('sheet');
+  const sheetBody = document.getElementById('sheetBody');
+  let sheetCell = null;
+  let sheetMode = null; // 'tree' | 'plant' | 'reveal'
+  const $ = (id) => document.getElementById(id);
+
+  function closeSheet() { sheet.classList.add('hidden'); sheetCell = null; sheetMode = null; }
+  $('sheetClose').onclick = closeSheet;
+
+  function openCell(i, j) {
+    const k = key(i, j);
+    if (state.trees[k]) return showTreeSheet(i, j);
+    if (!playerPos()) return toast('Waiting for your location…');
+    if (!inReach(i, j)) { closeSheet(); return toast('Walk closer to plant here'); }
+    showPlantSheet(i, j);
+  }
+
+  function showPlantSheet(i, j) {
+    sheetCell = [i, j]; sheetMode = 'plant';
+    sheetBody.innerHTML = `
+      <div class="rarity">Empty plot</div>
+      <h3>Plant a seed?</h3>
+      <div class="row"><span>Cost</span><span id="shCost"></span></div>
+      <div class="row"><span>Your HE</span><span id="shHE"></span></div>
+      <div class="hint">${SPECIES.map((s) => `<span style="color:${s.color}">${s.name}</span> ${s.max - s.min + 1}%`).join(' · ')}</div>
+      <div class="actions"><button class="primary" id="plantBtn">Plant seed</button></div>`;
+    $('plantBtn').onclick = () => plant(i, j);
+    sheet.classList.remove('hidden');
+    updateSheet();
+  }
+
+  function plant(i, j) {
+    const k = key(i, j);
+    if (state.trees[k] || !inReach(i, j)) return;
+    const cost = E.plantCost(state.planted);
+    if (state.he < cost) return toast('Not enough HE, keep walking');
+    settle();
+    state.he -= cost;
+    const roll = E.rollD100();
+    const s = E.speciesForRoll(roll);
+    const t = now();
+    state.trees[k] = { s, h0: C.START_HYDRATION, tw: t, plantedAt: t, roll };
+    state.planted++;
     save();
     redrawAll();
     updateHud();
+    vibrate(s === 3 ? [100, 50, 100, 50, 300] : 30);
+    showReveal(i, j, roll);
   }
 
-  map.on('click', (e) => onTap(e.latlng, false));
-  map.on('contextmenu', (e) => onTap(e.latlng, true)); // right-click / long-press
-
-  function boom() {
-    vibrate([80, 40, 160]);
-    document.body.classList.remove('boom');
-    void document.body.offsetWidth;
-    document.body.classList.add('boom');
-    setTimeout(() => document.body.classList.remove('boom'), 450);
-    toast(`💥 Mine! −${MINE_PENALTY} points`);
+  function showReveal(i, j, roll) {
+    sheetCell = [i, j]; sheetMode = 'reveal';
+    const sp = SPECIES[state.trees[key(i, j)].s];
+    sheetBody.innerHTML = `
+      <div class="reveal">
+        <div class="rarity">You rolled ${roll}</div>
+        <canvas id="revealCanvas" width="${120 * dpr}" height="${120 * dpr}" style="width:120px;height:120px"></canvas>
+        <div class="big" style="color:${sp.color}">${sp.name}</div>
+        <div class="rarity">${sp.rarity} · ${sp.aesthetic}</div>
+        <div class="row" style="justify-content:center;gap:6px"><span>Base rate</span><b>${sp.rate} Sap/min</b></div>
+      </div>
+      <div class="actions"><button id="revealOk">Nice!</button></div>`;
+    const cv = $('revealCanvas').getContext('2d');
+    cv.scale(dpr, dpr);
+    drawTree(cv, 60, 58, 100, sp, 'bloom');
+    $('revealOk').onclick = () => showTreeSheet(i, j);
+    sheet.classList.remove('hidden');
   }
 
-  function vibrate(p) { if (navigator.vibrate) navigator.vibrate(p); }
+  function showTreeSheet(i, j) {
+    sheetCell = [i, j]; sheetMode = 'tree';
+    const sp = SPECIES[state.trees[key(i, j)].s];
+    sheetBody.innerHTML = `
+      <div class="rarity" style="color:${sp.color}">${sp.rarity} · ${sp.aesthetic}</div>
+      <h3>${sp.name}</h3>
+      <div class="row"><span>Hydration</span><span id="shHyd"></span></div>
+      <div class="bar" id="shBar"><div></div></div>
+      <div class="row"><span>State</span><span id="shState"></span></div>
+      <div class="row"><span>Production</span><span id="shRate"></span></div>
+      <div class="row"><span id="shNextLabel"></span><span id="shNext"></span></div>
+      <div class="actions"><button class="water" id="waterBtn"></button></div>
+      <div class="hint" id="shHint"></div>`;
+    $('waterBtn').onclick = () => waterTree(i, j);
+    sheet.classList.remove('hidden');
+    updateSheet();
+  }
+
+  function waterTree(i, j) {
+    const k = key(i, j);
+    if (!state.trees[k] || !inReach(i, j)) return;
+    settle();
+    const res = E.water(state.trees[k], now(), state.he);
+    if (!res.cost) return;
+    state.trees[k] = res.tree;
+    state.he = Math.max(0, state.he - res.cost);
+    save();
+    redrawAll();
+    updateHud();
+    updateSheet();
+    toast(E.hydrationState(res.tree, now()) === 'bloom' ? 'Canopy Bloom! 2.5x Sap' : `Watered +${Math.round(res.added)}%`);
+  }
+
+  const STATE_LABEL = { bloom: 'Canopy Bloom (2.5x)', optimal: 'Optimal (1.0x)', withered: 'Withered (0.1x)' };
+
+  function updateSheet() {
+    if (!sheetCell || sheet.classList.contains('hidden')) return;
+    const [i, j] = sheetCell;
+    const t = now();
+    if (sheetMode === 'plant') {
+      const cost = E.plantCost(state.planted);
+      $('shCost').textContent = cost ? `${cost} HE` : 'Free (first tree)';
+      $('shHE').textContent = fmt(state.he);
+      const ok = inReach(i, j) && state.he >= cost && !state.trees[key(i, j)];
+      $('plantBtn').disabled = !ok;
+      $('plantBtn').textContent = !inReach(i, j) ? 'Walk closer to plant' : state.he < cost ? 'Not enough HE' : 'Plant seed';
+    } else if (sheetMode === 'tree') {
+      const tree = state.trees[key(i, j)];
+      if (!tree) return closeSheet();
+      const sp = SPECIES[tree.s];
+      const st = E.hydrationState(tree, t);
+      const hyd = E.displayHydration(tree, t);
+      $('shHyd').textContent = hyd + '%';
+      $('shBar').className = 'bar ' + st;
+      $('shBar').firstChild.style.width = (st === 'withered' ? 100 : E.hydrationAt(tree, t)) + '%';
+      $('shState').textContent = STATE_LABEL[st];
+      $('shState').className = 'state-' + st;
+      const hm = E.HYDRATION_MULTIPLIER[st], fb = E.fertilizerBoost(state.boostUntil, t);
+      $('shRate').textContent = `${sp.rate} × ${hm} × ${fb} = ${fmt(sp.rate * hm * fb)} Sap/min`;
+      if (st === 'bloom') { $('shNextLabel').textContent = 'Bloom ends in'; $('shNext').textContent = fmtDur(E.drainStart(tree) - t); }
+      else if (st === 'optimal') { $('shNextLabel').textContent = 'Withers in'; $('shNext').textContent = fmtDur(E.dryAt(tree) - t); }
+      else { $('shNextLabel').textContent = 'Withered for'; $('shNext').textContent = fmtDur(t - E.dryAt(tree)); }
+
+      const btn = $('waterBtn'), hint = $('shHint');
+      const full = E.waterCostToFull(tree, t);
+      hint.textContent = '';
+      if (st === 'bloom') { btn.disabled = true; btn.textContent = 'Fully watered'; }
+      else if (!inReach(i, j)) { btn.disabled = true; btn.textContent = `Water to 100% (${Math.ceil(full)} HE)`; hint.textContent = 'Walk to this tree to water it.'; }
+      else if (state.he < 1) { btn.disabled = true; btn.textContent = 'Not enough HE'; hint.textContent = 'Walk to earn Hydro-Kinetic Energy.'; }
+      else if (state.he >= full) { btn.disabled = false; btn.textContent = `Water to 100% (−${Math.ceil(full)} HE)`; }
+      else { btn.disabled = false; btn.textContent = `Water +${Math.floor(state.he / C.WATER_COST_HE_PER_PCT)}% (−${Math.floor(state.he)} HE)`; }
+    }
+  }
+
+  map.on('click', (e) => {
+    if (map.getZoom() < MIN_GAME_ZOOM) return;
+    const [i, j] = cellOf(e.latlng);
+    openCell(i, j);
+  });
 
   // ---- HUD ----
-  const scoreEl = document.getElementById('score');
-  const clearedEl = document.getElementById('cleared');
-  const livesEl = document.getElementById('lives');
-  function updateHud() {
-    regenLives();
-    scoreEl.textContent = state.score;
-    let cleared = 0;
-    for (const k in state.cells) if (state.cells[k] === 'r') cleared++;
-    clearedEl.textContent = cleared;
-    let txt = '❤'.repeat(Math.max(0, state.lives)) + '♡'.repeat(MAX_LIVES - Math.max(0, state.lives));
-    if (state.lives < MAX_LIVES) {
-      const left = Math.max(0, LIFE_REGEN_MS - (Date.now() - state.livesAt));
-      txt += ` ${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`;
-    }
-    livesEl.textContent = txt;
+  function fmt(n) {
+    n = Math.floor(n);
+    if (n < 10000) return n.toLocaleString();
+    const units = [['B', 1e9], ['M', 1e6], ['K', 1e3]];
+    for (const [u, v] of units) if (n >= v) return (n / v).toFixed(n / v < 100 ? 1 : 0) + u;
+    return String(n);
   }
-  setInterval(updateHud, 1000);
+  function fmtDur(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+  }
+  let lastRedraw = 0;
+  function updateHud() {
+    settle();
+    const t = now();
+    $('he').textContent = fmt(state.he);
+    $('sap').textContent = fmt(state.sap);
+    const rate = totalRate(t);
+    $('sapRate').textContent = rate ? `+${fmt(rate)}/min` : '';
+    $('trees').textContent = Object.keys(state.trees).length;
+    const boostLeft = state.boostUntil - t;
+    $('boostStat').classList.toggle('hidden', boostLeft <= 0);
+    if (boostLeft > 0) $('boost').textContent = fmtDur(boostLeft);
+    if (t - lastRedraw > 15000) { lastRedraw = t; redrawAll(); }
+    save();
+  }
+  setInterval(() => { updateHud(); updateSheet(); }, 1000);
 
   let toastTimer = null;
-  const toastEl = document.getElementById('toast');
   function toast(msg) {
-    toastEl.textContent = msg;
-    toastEl.classList.add('show');
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
   }
+  function vibrate(p) { if (navigator.vibrate) navigator.vibrate(p); }
 
-  // ---- Controls ----
-  const modeBtn = document.getElementById('modeBtn');
-  modeBtn.onclick = () => {
-    flagMode = !flagMode;
-    modeBtn.textContent = flagMode ? '🚩 Flag' : '⛏ Reveal';
-    modeBtn.className = flagMode ? 'mode-flag' : 'mode-reveal';
+  // ---- Ad boost (mock) ----
+  $('adBtn').onclick = () => {
+    const overlay = $('adOverlay');
+    let left = C.AD_LENGTH_S;
+    $('adCountdown').textContent = left;
+    overlay.classList.remove('hidden');
+    const iv = setInterval(() => {
+      left--;
+      $('adCountdown').textContent = left;
+      if (left > 0) return;
+      clearInterval(iv);
+      overlay.classList.add('hidden');
+      settle();
+      state.boostUntil = Math.max(now(), state.boostUntil) + C.AD_BOOST_MS;
+      save();
+      updateHud();
+      updateSheet();
+      toast(`Fertilizer boost! 20x Sap for ${Math.round(C.AD_BOOST_MS / 60000)} min`);
+    }, 1000);
   };
 
-  document.getElementById('centerBtn').onclick = () => {
+  // ---- Controls ----
+  $('centerBtn').onclick = () => {
     follow = true;
     const pos = playerPos();
     if (pos) map.setView(pos, Math.max(map.getZoom(), 17));
   };
   map.on('dragstart', () => { follow = false; });
 
-  const simBtn = document.getElementById('simBtn');
-  const dpad = document.getElementById('dpad');
+  const simBtn = $('simBtn');
+  const dpad = $('dpad');
   function setSim(on) {
     simMode = on;
     simBtn.classList.toggle('active', on);
@@ -394,9 +516,10 @@
     const ll = SM.unproject(L.point(p.x + dxM * k, p.y + dyM * k));
     simPos = [ll.lat, ll.lng];
     state.simPos = simPos;
-    save();
+    addMeters(Math.hypot(dxM, dyM)); // sim walking earns HE for testing
     follow = true;
     updatePlayer();
+    updateHud();
   }
   const DIRS = { up: [0, 1], down: [0, -1], left: [-1, 0], right: [1, 0] };
   dpad.querySelectorAll('button').forEach((b) => {
@@ -410,22 +533,30 @@
   const KEYS = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
   window.addEventListener('keydown', (e) => {
     const d = KEYS[e.code];
-    if (d && simMode) {
-      e.preventDefault();
-      simMove(DIRS[d][0] * SIM_STEP_M, DIRS[d][1] * SIM_STEP_M);
-    } else if (e.code === 'KeyF') modeBtn.click();
+    if (d && simMode) { e.preventDefault(); simMove(DIRS[d][0] * SIM_STEP_M, DIRS[d][1] * SIM_STEP_M); }
+    else if (e.code === 'Escape') closeSheet();
   });
 
-  const menu = document.getElementById('menu');
-  document.getElementById('menuBtn').onclick = () => menu.classList.toggle('hidden');
-  document.getElementById('closeMenuBtn').onclick = () => menu.classList.add('hidden');
-  document.getElementById('resetBtn').onclick = () => {
+  const menu = $('menu');
+  $('menuBtn').onclick = () => menu.classList.toggle('hidden');
+  $('closeMenuBtn').onclick = () => menu.classList.add('hidden');
+  $('resetBtn').onclick = () => {
     if (!confirm('Erase all your progress?')) return;
-    state = { cells: {}, score: 0, lives: MAX_LIVES, livesAt: Date.now(), simPos: state.simPos };
+    const keepPos = state.simPos;
+    state = freshState();
+    state.simPos = keepPos;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    closeSheet();
     redrawAll();
     updateHud();
     menu.classList.add('hidden');
+  };
+
+  // Dev helpers (browser console): geogrove.addHE(1000), geogrove.skip(3600e3)
+  window.geogrove = {
+    get state() { return state; },
+    addHE(n) { state.he += n; updateHud(); updateSheet(); },
+    skip(ms) { state.timeOffset = (state.timeOffset || 0) + ms; updateHud(); redrawAll(); updateSheet(); },
   };
 
   if (!localStorage.getItem(STORAGE_KEY)) menu.classList.remove('hidden');
