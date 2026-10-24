@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <meta name="theme-color" content="#14201a" />
+  <meta name="theme-color" content="#2a1f2d" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="manifest.json" />
-  <title>GeoGrove</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <title>Canopy Claims</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -53,8 +53,8 @@
   </div>
 
   <div id="menu" class="hidden">
-    <h2>GeoGrove</h2>
-    <p>Grow a glowing forest on the real world map.</p>
+    <h2>Canopy Claims</h2>
+    <p>Claim real-world plots and grow a glowing low-poly forest.</p>
     <ul>
       <li><b>Walk</b> to earn Hydro-Kinetic Energy (HE): 1 meter = 1 HE.</li>
       <li><b>Plant</b> on an empty plot next to you (yellow). The seed rolls a species:
@@ -69,8 +69,12 @@
     <button id="closeMenuBtn">Close</button>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                   "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+  </script>
   <script src="economy.js"></script>
-  <script src="game.js"></script>
+  <script type="module" src="game.js"></script>
 </body>
 </html>

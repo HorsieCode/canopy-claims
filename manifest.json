@@ -1,9 +1,9 @@
 {
-  "name": "GeoGrove",
-  "short_name": "GeoGrove",
+  "name": "Canopy Claims",
+  "short_name": "Canopy Claims",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#14201a",
-  "theme_color": "#14201a",
+  "background_color": "#2a1f2d",
+  "theme_color": "#2a1f2d",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

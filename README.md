@@ -1,4 +1,4 @@
-# GeoGrove
+# Canopy Claims
 
 A GPS map game prototype in the style of Terramine. The real world is split into a grid of plots (~28 m). Walking earns Hydro-Kinetic Energy (HE), which you spend to plant and water glowing trees. The trees produce Sap passively.
 
@@ -27,4 +27,10 @@ Phones only allow GPS on **HTTPS**, so to play outdoors, host the folder on any 
 
 ## Dev console helpers
 
-`geogrove.addHE(1000)` adds HE, and `geogrove.skip(3600e3)` fast-forwards the game clock by 1 hour.
+`canopy.addHE(1000)` adds HE, and `canopy.skip(3600e3)` fast-forwards the game clock by 1 hour.
+
+## Art direction
+Tilted 3D map (MapLibre GL, pitch 68°) with a custom sunset low-poly style defined in `buildStyle()` in `game.js`
+(olive ground, dark roads, cream plot grid, warm extruded buildings, sunset sky). Trees are flat-shaded
+low-poly three.js models in `trees3d.js`, rendered through a MapLibre custom layer; Bloom adds a stronger glow + sparkles,
+Withered turns the canopy brown. Each plot shows a ground hydration bar.

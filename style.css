@@ -1,7 +1,7 @@
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: #14201a; }
+html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: #2a1f2d; }
 #map { position: absolute; inset: 0; }
-.leaflet-container { background: #14201a; }
+.maplibregl-canvas { outline: none; }
 
 #hud {
   position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1000;
@@ -33,11 +33,11 @@ button {
 }
 button:active { transform: scale(0.96); }
 button:disabled { opacity: .45; cursor: default; transform: none; }
-button.active { background: #2f6fd6; }
-button.primary { background: #2e9e5b; }
-button.water { background: #2f6fd6; }
+button.active { background: #3b7fd1; }
+button.primary { background: #d9822b; }
+button.water { background: #3b7fd1; }
 button.danger { background: #b8322a; }
-#adBtn { background: #b9770e; }
+#adBtn { background: #c2513a; }
 
 #dpad {
   position: absolute; right: 14px; bottom: 86px; z-index: 1000;
@@ -58,7 +58,7 @@ button.danger { background: #b8322a; }
 
 #sheet {
   position: absolute; z-index: 1002; left: 50%; bottom: 0; transform: translateX(-50%);
-  width: min(100vw, 460px); background: #14201a; color: #eee;
+  width: min(100vw, 460px); background: #2a1f2d; color: #eee;
   border-radius: 18px 18px 0 0; padding: 18px 18px 26px; box-shadow: 0 -6px 30px rgba(0,0,0,.6);
 }
 #sheet .close { position: absolute; right: 10px; top: 10px; padding: 6px 10px; font-size: 14px; }
@@ -68,7 +68,7 @@ button.danger { background: #b8322a; }
 #sheet .actions { display: flex; gap: 8px; margin-top: 12px; }
 #sheet .actions button { flex: 1; }
 #sheet .hint { font-size: 12px; opacity: .7; margin-top: 8px; }
-.bar { height: 10px; background: #2a3a30; border-radius: 6px; overflow: hidden; margin: 6px 0 10px; }
+.bar { height: 10px; background: #3d2e40; border-radius: 6px; overflow: hidden; margin: 6px 0 10px; }
 .bar > div { height: 100%; background: linear-gradient(90deg, #2f8cff, #6ee7ff); }
 .bar.bloom > div { background: linear-gradient(90deg, #6ee7ff, #b6ffef); box-shadow: 0 0 10px #8ff; }
 .bar.withered > div { background: #7a5a3a; }
@@ -93,7 +93,7 @@ button.danger { background: #b8322a; }
 #menu {
   position: absolute; z-index: 1002; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: min(92vw, 440px); max-height: 85vh; overflow: auto;
-  background: #14201a; color: #eee; border-radius: 16px; padding: 18px; box-shadow: 0 8px 30px rgba(0,0,0,.6);
+  background: #2a1f2d; color: #eee; border-radius: 16px; padding: 18px; box-shadow: 0 8px 30px rgba(0,0,0,.6);
 }
 #menu h2 { margin-top: 0; }
 #menu ul { padding-left: 18px; line-height: 1.45; font-size: 14px; }
@@ -106,3 +106,10 @@ button.danger { background: #b8322a; }
   box-shadow: 0 0 0 2px rgba(47,140,255,.4), 0 2px 6px rgba(0,0,0,.5);
 }
 .player-dot.sim { background: #ff8c2f; box-shadow: 0 0 0 2px rgba(255,140,47,.4), 0 2px 6px rgba(0,0,0,.5); }
+
+/* Canopy Claims sunset theme */
+#hud .stat, #controls button, #gps { background: rgba(42, 31, 45, 0.82); backdrop-filter: blur(4px); border: 1px solid rgba(255, 210, 150, 0.18); }
+#sheet, #menu { background: linear-gradient(180deg, #3a2a3c, #2a1f2d); border-top: 2px solid #ffb35a; }
+h2, h3 { color: #ffd38a; letter-spacing: 0.02em; }
+.player-dot { width: 22px; height: 22px; background: #ffb35a; border: 3px solid #fff4dc; box-shadow: 0 0 0 6px rgba(255, 179, 90, 0.35), 0 0 18px rgba(255, 200, 120, 0.8); }
+.player-dot.sim { background: #ff7a45; }
