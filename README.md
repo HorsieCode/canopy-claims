@@ -22,8 +22,9 @@ Phones only allow GPS on **HTTPS**, so to play outdoors, host the folder on any 
 ## Formulas
 
 - HE generated = meters walked × `HE_PER_METER`. GPS jitter (<8 m), poor fixes (>30 m accuracy) and vehicle speeds (>7 m/s) earn nothing.
-- Sap rate (per min) = species base rate × hydration multiplier (Withered 0.1, Optimal 1.0, Canopy Bloom 2.5) × fertilizer boost (20 while an ad boost is active, else 1).
-- Offline production is integrated exactly across bloom/withered/boost boundaries (`Economy.sapBetween`).
+- Sap rate (per min) = species base rate × hydration multiplier (Withered 0.1, Optimal 1.0, Canopy Bloom 2.5) × engine multiplier (fixed global 20.0, always on).
+- Sap value: 1 Sap = $0.00000001 USD (100,000,000 Sap = $1.00), `Economy.sapToUSD`, shown in the HUD and tree sheet.
+- Offline production is integrated exactly across bloom/withered boundaries (`Economy.sapBetween`).
 
 ## Dev console helpers
 

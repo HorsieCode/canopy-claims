@@ -32,7 +32,7 @@ function haversine(a, b) {
 const $ = (id) => document.getElementById(id);
 
 // ---- State ----
-const freshState = () => ({ he: 0, metersWalked: 0, sap: 0, lastTick: Date.now(), boostUntil: 0, planted: 0, trees: {}, simPos: null, timeOffset: 0 });
+const freshState = () => ({ he: 0, metersWalked: 0, sap: 0, lastTick: Date.now(), planted: 0, trees: {}, simPos: null, timeOffset: 0 });
 let state = (() => {
   try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY)); if (s && s.trees) return Object.assign(freshState(), s); } catch (e) { /* ignore */ }
   return freshState();
@@ -43,10 +43,10 @@ let saveTimer = null;
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(state)), 300); }
 function settle() {
   const t = now();
-  for (const k in state.trees) state.sap += E.sapBetween(state.trees[k], state.boostUntil, state.lastTick, t);
+  for (const k in state.trees) state.sap += E.sapBetween(state.trees[k], state.lastTick, t);
   state.lastTick = t;
 }
-const totalRate = (t) => Object.values(state.trees).reduce((r, tr) => r + E.sapRate(tr, state.boostUntil, t), 0);
+const totalRate = (t) => Object.values(state.trees).reduce((r, tr) => r + E.sapRate(tr, t), 0);
 function addMeters(m) { state.metersWalked += m; state.he += m * C.HE_PER_METER; save(); }
 
 // ---- Map style (sunset low-poly palette) ----
@@ -146,23 +146,34 @@ function onGpsFix(pos, acc, t) {
   else toast('Moving too fast, no HE in vehicles');
   anchor = pos; anchorT = t;
 }
-if ('geolocation' in navigator) {
-  navigator.geolocation.watchPosition((p) => {
+let gpsWatch = null;
+// Real GPS needs a secure (https or localhost) page and the user's location permission.
+function startGps(userAsked) {
+  if (!('geolocation' in navigator) || !window.isSecureContext) {
+    const why = !window.isSecureContext ? 'GPS needs an https page' : 'GPS unsupported on this device';
+    $('gps').textContent = why; $('gps').classList.add('warn');
+    if (userAsked) toast(why);
+    if (!simMode) setTimeout(() => setSim(true), 0);
+    return;
+  }
+  if (gpsWatch !== null) navigator.geolocation.clearWatch(gpsWatch);
+  $('gps').textContent = 'GPS: locating…';
+  gpsWatch = navigator.geolocation.watchPosition((p) => {
     gpsPos = [p.coords.longitude, p.coords.latitude];
     gpsAccuracy = p.coords.accuracy;
     $('gps').textContent = `GPS ±${Math.round(gpsAccuracy)} m`;
     $('gps').classList.toggle('warn', gpsAccuracy > GPS_MAX_ACCURACY_M);
     onGpsFix(gpsPos, gpsAccuracy, p.timestamp || Date.now());
     if (!simMode) updatePlayer();
-  }, () => {
-    $('gps').textContent = 'GPS unavailable';
+  }, (err) => {
+    const denied = err && err.code === 1;
+    $('gps').textContent = denied ? 'Location blocked' : 'GPS unavailable';
     $('gps').classList.add('warn');
-    if (!gpsPos && !simMode) { toast('No GPS, switching to Sim mode'); setSim(true); }
+    if (userAsked) toast(denied ? 'Allow location access for this site in your browser settings' : 'No GPS signal yet, staying in Sim');
+    if (!gpsPos && !simMode) { if (!userAsked) toast('No GPS, switching to Sim mode'); setSim(true); }
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
-} else {
-  $('gps').textContent = 'GPS unsupported';
-  setTimeout(() => setSim(true), 0);
 }
+startGps(false);
 
 // ---- Grid + plots (GeoJSON) ----
 let gridCentre = null;
@@ -364,6 +375,7 @@ function showTreeSheet(i, j) {
     <div class="bar" id="shBar"><div></div></div>
     <div class="row"><span>State</span><span id="shState"></span></div>
     <div class="row"><span>Production</span><span id="shRate"></span></div>
+    <div class="row"><span>Value</span><span id="shUsd" class="usd-text"></span></div>
     <div class="row"><span id="shNextLabel"></span><span id="shNext"></span></div>
     <div class="actions"><button class="water" id="waterBtn"></button></div>
     <div class="hint" id="shHint"></div>`;
@@ -403,8 +415,9 @@ function updateSheet() {
     $('shBar').firstChild.style.width = (st === 'withered' ? 100 : E.hydrationAt(tree, t)) + '%';
     $('shState').textContent = STATE_LABEL[st];
     $('shState').className = 'state-' + st;
-    const hm = E.HYDRATION_MULTIPLIER[st], fb = E.fertilizerBoost(state.boostUntil, t);
-    $('shRate').textContent = `${sp.rate} × ${hm} × ${fb} = ${fmt(sp.rate * hm * fb)} Sap/min`;
+    const hm = E.HYDRATION_MULTIPLIER[st], em = E.engineMultiplier(), r = sp.rate * hm * em;
+    $('shRate').textContent = `${sp.rate} × ${hm} × ${em} = ${fmt(r)} Sap/min`;
+    $('shUsd').textContent = `${fmtUSD(E.sapToUSD(r))}/min`;
     if (st === 'bloom') { $('shNextLabel').textContent = 'Bloom ends in'; $('shNext').textContent = fmtDur(E.drainStart(tree) - t); }
     else if (st === 'optimal') { $('shNextLabel').textContent = 'Withers in'; $('shNext').textContent = fmtDur(E.dryAt(tree) - t); }
     else { $('shNextLabel').textContent = 'Withered for'; $('shNext').textContent = fmtDur(t - E.dryAt(tree)); }
@@ -425,6 +438,7 @@ function fmt(n) {
   for (const [u, v] of [['B', 1e9], ['M', 1e6], ['K', 1e3]]) if (n >= v) return (n / v).toFixed(n / v < 100 ? 1 : 0) + u;
   return String(n);
 }
+function fmtUSD(v) { return '$' + (v < 1000 ? v.toFixed(8) : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })); }
 function fmtDur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
@@ -437,10 +451,9 @@ function updateHud() {
   $('sap').textContent = fmt(state.sap);
   const rate = totalRate(t);
   $('sapRate').textContent = rate ? `+${fmt(rate)}/min` : '';
+  $('usd').textContent = fmtUSD(E.sapToUSD(state.sap));
+  $('usdRate').textContent = rate ? `+${fmtUSD(E.sapToUSD(rate))}/min` : '';
   $('trees').textContent = Object.keys(state.trees).length;
-  const boostLeft = state.boostUntil - t;
-  $('boostStat').classList.toggle('hidden', boostLeft <= 0);
-  if (boostLeft > 0) $('boost').textContent = fmtDur(boostLeft);
   if (t - lastStateSync > 10000) { lastStateSync = t; syncTrees(); updatePlots(); }
   save();
 }
@@ -456,22 +469,6 @@ function toast(msg) {
 }
 function vibrate(p) { if (navigator.vibrate) navigator.vibrate(p); }
 
-// ---- Ad boost (mock) ----
-$('adBtn').onclick = () => {
-  let left = C.AD_LENGTH_S;
-  $('adCountdown').textContent = left;
-  $('adOverlay').classList.remove('hidden');
-  const iv = setInterval(() => {
-    $('adCountdown').textContent = --left;
-    if (left > 0) return;
-    clearInterval(iv);
-    $('adOverlay').classList.add('hidden');
-    settle();
-    state.boostUntil = Math.max(now(), state.boostUntil) + C.AD_BOOST_MS;
-    save(); updateHud(); updateSheet();
-    toast(`Fertilizer boost! 20x Sap for ${Math.round(C.AD_BOOST_MS / 60000)} min`);
-  }, 1000);
-};
 
 // ---- Controls ----
 $('centerBtn').onclick = () => {
@@ -484,6 +481,8 @@ map.on('dragstart', () => { follow = false; });
 function setSim(on) {
   simMode = on;
   $('simBtn').classList.toggle('active', on);
+  $('simBtn').textContent = on ? '📡 Use GPS' : '🚶 Sim';
+  if (!on && !gpsPos) startGps(true);
   $('dpad').classList.toggle('hidden', !on);
   if (on && !simPos) simPos = gpsPos || map.getCenter().toArray();
   playerCell = null;

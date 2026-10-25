@@ -18,7 +18,8 @@
     <div class="stat he"><span class="label">Hydro-Kinetic</span><span id="he">0</span></div>
     <div class="stat sap"><span class="label">Sap <small id="sapRate"></small></span><span id="sap">0</span></div>
     <div class="stat"><span class="label">Trees</span><span id="trees">0</span></div>
-    <div class="stat boost hidden" id="boostStat"><span class="label">Fertilizer 20x</span><span id="boost"></span></div>
+    <div class="stat usd"><span class="label">Value <small id="usdRate"></small></span><span id="usd">$0.00000000</span></div>
+    <div class="stat engine"><span class="label">Engine</span><span>20x</span></div>
     <div class="stat small"><span id="gps">GPS: waiting…</span></div>
   </div>
 
@@ -32,9 +33,8 @@
   </div>
 
   <div id="controls">
-    <button id="adBtn" title="Watch an ad for a 20x boost">📺 Boost</button>
     <button id="centerBtn" title="Center on me">◎</button>
-    <button id="simBtn" title="Simulated walking">🚶 Sim</button>
+    <button id="simBtn" title="Switch between real GPS and simulated walking">🚶 Sim</button>
     <button id="menuBtn" title="Menu">☰</button>
   </div>
 
@@ -43,14 +43,6 @@
     <div id="sheetBody"></div>
   </div>
 
-  <div id="adOverlay" class="hidden">
-    <div class="ad-box">
-      <div class="ad-label">Advertisement</div>
-      <div class="ad-content">Your ad here</div>
-      <div id="adCountdown">15</div>
-      <div class="ad-sub">Fertilizer boost unlocks when the ad finishes</div>
-    </div>
-  </div>
 
   <div id="menu" class="hidden">
     <h2>Canopy Claims</h2>
@@ -62,7 +54,8 @@
       <li><b>Water</b> your trees with HE. 100% hydration = Canopy Bloom (2.5x) for a while,
         1–99% = normal, 0% = Withered (0.1x).</li>
       <li>Trees make <b>Sap</b> all the time, even while the app is closed.</li>
-      <li><b>Boost</b>: watch an ad for 20x Sap production.</li>
+      <li>The global <b>engine multiplier</b> is always 20x. Sap value: 1 Sap = $0.00000001 (100,000,000 Sap = $1.00).</li>
+      <li>GPS needs an https page and location permission. Tap <b>Use GPS</b> to switch back from Sim.</li>
       <li>Sim mode lets you walk with arrow keys / WASD or the on-screen pad (for testing).</li>
     </ul>
     <button id="resetBtn" class="danger">Reset my progress</button>

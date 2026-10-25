@@ -79,16 +79,6 @@ button.danger { background: #b8322a; }
 .reveal .big { font-size: 26px; font-weight: 800; margin: 8px 0; }
 .reveal canvas { display: block; margin: 0 auto; }
 
-#adOverlay {
-  position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.92);
-  display: flex; align-items: center; justify-content: center; color: #fff;
-}
-.ad-box { text-align: center; }
-.ad-label { font-size: 12px; text-transform: uppercase; opacity: .6; }
-.ad-content { width: 280px; height: 160px; margin: 12px auto; border: 2px dashed #666; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center; font-size: 18px; opacity: .8; }
-#adCountdown { font-size: 40px; font-weight: 800; }
-.ad-sub { font-size: 13px; opacity: .7; }
 
 #menu {
   position: absolute; z-index: 1002; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -113,3 +103,5 @@ button.danger { background: #b8322a; }
 h2, h3 { color: #ffd38a; letter-spacing: 0.02em; }
 .player-dot { width: 22px; height: 22px; background: #ffb35a; border: 3px solid #fff4dc; box-shadow: 0 0 0 6px rgba(255, 179, 90, 0.35), 0 0 18px rgba(255, 200, 120, 0.8); }
 .player-dot.sim { background: #ff7a45; }
+.stat.usd span:last-child, .usd-text { color: #7dffb0; font-variant-numeric: tabular-nums; }
+.stat.engine span:last-child { color: #ff9f5a; }

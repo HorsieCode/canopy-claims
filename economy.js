@@ -10,9 +10,8 @@
     WATER_COST_HE_PER_PCT: 2,
     BLOOM_HOLD_MS: 60 * 60 * 1000,         // how long 100% lasts before draining starts
     DRAIN_FULL_MS: 24 * 60 * 60 * 1000,    // time to drain 100% -> 0%
-    FERTILIZER_BOOST: 20.0,
-    AD_BOOST_MS: 30 * 60 * 1000,
-    AD_LENGTH_S: 15,
+    ENGINE_MULTIPLIER: 20.0,      // fixed global engine multiplier (always on)
+    USD_PER_SAP: 0.00000001,      // 100,000,000 Sap = $1.00
   };
 
   const HYDRATION_MULTIPLIER = { withered: 0.1, optimal: 1.0, bloom: 2.5 };
@@ -52,22 +51,23 @@
     return Math.min(99, Math.max(1, Math.ceil(hydrationAt(tree, now))));
   }
 
-  const fertilizerBoost = (boostUntil, now) => (boostUntil - now > 0 ? CONFIG.FERTILIZER_BOOST : 1.0);
+  const engineMultiplier = () => CONFIG.ENGINE_MULTIPLIER;
+  const sapToUSD = (sap) => sap * CONFIG.USD_PER_SAP;
 
-  // Passive Sap Production Rate = Base Tree Sap Rate x Hydration Multiplier x Fertilizer Boost  (Sap / minute)
-  function sapRate(tree, boostUntil, now) {
-    return SPECIES[tree.s].rate * HYDRATION_MULTIPLIER[hydrationState(tree, now)] * fertilizerBoost(boostUntil, now);
+  // Passive Sap Production Rate = Base Tree Sap Rate x Hydration Multiplier x Engine Multiplier (20.0)  (Sap / minute)
+  function sapRate(tree, now) {
+    return SPECIES[tree.s].rate * HYDRATION_MULTIPLIER[hydrationState(tree, now)] * engineMultiplier();
   }
 
   // Exact Sap produced in [t0, t1]: the rate is piecewise constant, so split at every state change.
-  function sapBetween(tree, boostUntil, t0, t1) {
+  function sapBetween(tree, t0, t1) {
     if (t1 <= t0) return 0;
-    const cuts = [drainStart(tree), dryAt(tree), boostUntil].filter((x) => x > t0 && x < t1).sort((a, b) => a - b);
+    const cuts = [drainStart(tree), dryAt(tree)].filter((x) => x > t0 && x < t1).sort((a, b) => a - b);
     const pts = [t0, ...cuts, t1];
     let sap = 0;
     for (let k = 0; k < pts.length - 1; k++) {
       const a = pts[k], b = pts[k + 1];
-      sap += sapRate(tree, boostUntil, (a + b) / 2) * ((b - a) / 60000);
+      sap += sapRate(tree, (a + b) / 2) * ((b - a) / 60000);
     }
     return sap;
   }
@@ -94,6 +94,6 @@
   root.Economy = {
     CONFIG, SPECIES, HYDRATION_MULTIPLIER,
     rollD100, speciesForRoll, drainStart, dryAt, hydrationAt, hydrationState, displayHydration,
-    fertilizerBoost, sapRate, sapBetween, water, waterCostToFull, plantCost,
+    engineMultiplier, sapToUSD, sapRate, sapBetween, water, waterCostToFull, plantCost,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
