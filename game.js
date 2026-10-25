@@ -11,7 +11,8 @@ const REACH = 1;
 const TREE_SCALE = 1.3;       // trees fill most of their plot
 const GRID_RADIUS = 45;          // plots drawn around the view centre
 const SIM_STEP_M = 8;
-const GPS_MAX_ACCURACY_M = 30, GPS_MIN_STEP_M = 8, GPS_MAX_SPEED_MPS = 7;
+// Phone browsers often report 20-50 m accuracy while walking; readings worse than 50 m are too noisy to count.
+const GPS_MAX_ACCURACY_M = 50, GPS_MIN_STEP_M = 5, GPS_MAX_SPEED_MPS = 7;
 const DEFAULT_POS = [-73.9665, 40.7812]; // [lng, lat]
 const STORAGE_KEY = 'canopyclaims:v1';
 
@@ -47,7 +48,7 @@ function settle() {
   state.lastTick = t;
 }
 const totalRate = (t) => Object.values(state.trees).reduce((r, tr) => r + E.sapRate(tr, t), 0);
-function addMeters(m) { state.metersWalked += m; state.he += m * C.HE_PER_METER; save(); }
+function addMeters(m) { state.metersWalked += m; state.he += m * C.HE_PER_METER; save(); updateHud(); }
 
 // ---- Map style (sunset low-poly palette) ----
 const P = {
@@ -141,37 +142,79 @@ function onGpsFix(pos, acc, t) {
   if (acc > GPS_MAX_ACCURACY_M) return;
   if (!anchor) { anchor = pos; anchorT = t; return; }
   const d = haversine(anchor, pos);
-  if (d < Math.max(GPS_MIN_STEP_M, acc * 0.5)) return;
+  if (d < Math.max(GPS_MIN_STEP_M, acc * 0.4)) return;
   if (d / Math.max(1, (t - anchorT) / 1000) <= GPS_MAX_SPEED_MPS) addMeters(d);
   else toast('Moving too fast, no HE in vehicles');
   anchor = pos; anchorT = t;
 }
-let gpsWatch = null;
+let gpsWatch = null, autoSim = false, lastGoodFixT = 0;
+
+// ---- Step counter (motion sensor) -> HE whenever GPS is too weak to measure distance ----
+const STEP_M = 0.762, GPS_GOOD_GRACE_MS = 15000;
+let steps = 0, motionOn = false, motionAsked = false, accAvg = 9.8, stepArmed = true, lastStepT = 0;
+const gpsGood = () => gpsAccuracy != null && gpsAccuracy <= GPS_MAX_ACCURACY_M && Date.now() - lastGoodFixT < GPS_GOOD_GRACE_MS;
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null) return;
+  const mag = Math.hypot(a.x, a.y, a.z), t = performance.now();
+  accAvg = accAvg * 0.9 + mag * 0.1;
+  const dev = mag - accAvg;
+  if (stepArmed && dev > 1.2 && t - lastStepT > 300) { stepArmed = false; lastStepT = t; onStep(); }
+  else if (dev < 0.2) stepArmed = true;
+}
+function onStep() {
+  steps++;
+  if (gpsGood()) return; // GPS is measuring distance; don't double count
+  anchor = null;         // re-anchor GPS so the step-counted stretch isn't added again
+  addMeters(STEP_M);
+  $('gps').textContent = `Steps ${steps}${gpsAccuracy != null ? ` · GPS ±${Math.round(gpsAccuracy)} m` : ''}`;
+}
+// iPhone needs a tap before it allows motion access; Android just starts.
+function enableMotion() {
+  if (motionOn || motionAsked || typeof DeviceMotionEvent === 'undefined') return;
+  motionAsked = true;
+  const start = () => { motionOn = true; window.addEventListener('devicemotion', onMotion); };
+  if (typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission()
+      .then((r) => (r === 'granted' ? start() : toast('Motion access denied: steps only count with good GPS')))
+      .catch(() => { motionAsked = false; });
+  } else start();
+}
+window.addEventListener('click', enableMotion);
+window.addEventListener('touchend', enableMotion);
+
+function handleFix(p) {
+  gpsPos = [p.coords.longitude, p.coords.latitude];
+  gpsAccuracy = p.coords.accuracy;
+  if (gpsAccuracy <= GPS_MAX_ACCURACY_M) lastGoodFixT = Date.now();
+  $('gps').textContent = `GPS ±${Math.round(gpsAccuracy)} m${gpsAccuracy > GPS_MAX_ACCURACY_M ? ' (too weak for HE)' : ''}`;
+  $('gps').classList.toggle('warn', gpsAccuracy > GPS_MAX_ACCURACY_M);
+  onGpsFix(gpsPos, gpsAccuracy, p.timestamp || Date.now());
+  // Sim was only switched on because GPS wasn't ready yet: hand control back to the real position.
+  if (simMode && autoSim) { setSim(false); toast('GPS found'); }
+  else if (!simMode) updatePlayer();
+}
 // Real GPS needs a secure (https or localhost) page and the user's location permission.
 function startGps(userAsked) {
   if (!('geolocation' in navigator) || !window.isSecureContext) {
     const why = !window.isSecureContext ? 'GPS needs an https page' : 'GPS unsupported on this device';
     $('gps').textContent = why; $('gps').classList.add('warn');
     if (userAsked) toast(why);
-    if (!simMode) setTimeout(() => setSim(true), 0);
+    if (!simMode) setTimeout(() => { setSim(true); autoSim = true; }, 0);
     return;
   }
   if (gpsWatch !== null) navigator.geolocation.clearWatch(gpsWatch);
   $('gps').textContent = 'GPS: locating…';
-  gpsWatch = navigator.geolocation.watchPosition((p) => {
-    gpsPos = [p.coords.longitude, p.coords.latitude];
-    gpsAccuracy = p.coords.accuracy;
-    $('gps').textContent = `GPS ±${Math.round(gpsAccuracy)} m`;
-    $('gps').classList.toggle('warn', gpsAccuracy > GPS_MAX_ACCURACY_M);
-    onGpsFix(gpsPos, gpsAccuracy, p.timestamp || Date.now());
-    if (!simMode) updatePlayer();
-  }, (err) => {
-    const denied = err && err.code === 1;
-    $('gps').textContent = denied ? 'Location blocked' : 'GPS unavailable';
+  gpsWatch = navigator.geolocation.watchPosition(handleFix, (err) => {
+    const code = err ? err.code : 2;
+    // Timeouts (code 3) are normal while the phone gets its first fix; the watch keeps running.
+    if (code === 3) { if (!gpsPos) $('gps').textContent = 'GPS: searching…'; return; }
+    $('gps').textContent = code === 1 ? 'Location blocked' : 'GPS unavailable';
     $('gps').classList.add('warn');
-    if (userAsked) toast(denied ? 'Allow location access for this site in your browser settings' : 'No GPS signal yet, staying in Sim');
-    if (!gpsPos && !simMode) { if (!userAsked) toast('No GPS, switching to Sim mode'); setSim(true); }
-  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
+    if (code === 1) { navigator.geolocation.clearWatch(gpsWatch); gpsWatch = null; }
+    if (userAsked) toast(code === 1 ? 'Location is blocked for this site: allow it in your browser/phone settings, then tap Use GPS' : 'No GPS signal yet, keep the page open outdoors');
+    if (!gpsPos && !simMode) { if (!userAsked) toast(code === 1 ? 'Location blocked, using Sim mode' : 'No GPS yet, using Sim until it connects'); setSim(true); autoSim = true; }
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
 }
 startGps(false);
 
@@ -222,7 +265,7 @@ const treeLayer = {
     this.camera.projectionMatrix = new THREE.Matrix4().fromArray(mat).multiply(originMatrix);
     const t = performance.now();
     let animating = false;
-    for (const g of treeGroups.values()) { animateTree(g, t); animating = animating || g.userData.glow.visible; }
+    for (const g of treeGroups.values()) { animateTree(g, t); animating = true; }
     this.renderer.resetState();
     this.renderer.render(this.scene, this.camera);
     if (animating) map.triggerRepaint();
@@ -480,9 +523,10 @@ map.on('dragstart', () => { follow = false; });
 
 function setSim(on) {
   simMode = on;
+  autoSim = false;
   $('simBtn').classList.toggle('active', on);
   $('simBtn').textContent = on ? '📡 Use GPS' : '🚶 Sim';
-  if (!on && !gpsPos) startGps(true);
+  if (!on && (!gpsPos || gpsWatch === null)) startGps(true);
   $('dpad').classList.toggle('hidden', !on);
   if (on && !simPos) simPos = gpsPos || map.getCenter().toArray();
   playerCell = null;
@@ -548,6 +592,8 @@ $('resetBtn').onclick = () => {
 window.canopy = {
   get state() { return state; },
   map,
+  steps: () => steps,
+  gps(lng, lat, acc = 10, t = Date.now()) { handleFix({ coords: { longitude: lng, latitude: lat, accuracy: acc }, timestamp: t }); },
   addHE(n) { state.he += n; updateHud(); updateSheet(); },
   skip(ms) { state.timeOffset = (state.timeOffset || 0) + ms; updateHud(); syncTrees(); updatePlots(); updateSheet(); },
 };

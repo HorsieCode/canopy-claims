@@ -11,31 +11,36 @@ const phong = (o) => new THREE.MeshPhongMaterial({ flatShading: true, ...o });
 
 const LOOKS = {
   ironwood: {
-    canopy: { color: 0xdfe4ea, emissive: 0x30363e, specular: 0xffffff, shininess: 110 },
+    canopy: { color: 0xdfe4ea, emissive: 0x6a7480, specular: 0xffffff, shininess: 110 },
     dark: { color: 0x8a94a3, emissive: 0x1a1e24, specular: 0xcfd6e0, shininess: 70 },
-    accent: { color: 0xf3e2a6, emissive: 0x6b5a20, specular: 0xffffff, shininess: 120 },
-    glow: 0xe8f0ff, particle: { kind: 'leaf', color: 0xe6ecf5, count: 18 },
+    accent: { color: 0xf3e2a6, emissive: 0xb89a3a, specular: 0xffffff, shininess: 120 },
+    glow: 0xe8f0ff, glowScale: 0.6,
   },
   redwood: {
-    canopy: { color: 0xff2d55, emissive: 0xff1744, emissiveIntensity: 0.5, specular: 0xffa0b0, shininess: 40 },
-    dark: { color: 0x9c0d30, emissive: 0x5a0018, emissiveIntensity: 0.6, shininess: 20 },
-    accent: { color: 0xffb3c1, emissive: 0xff4d6d, emissiveIntensity: 1.2, shininess: 10 },
-    glow: 0xff1744, particle: { kind: 'ember', color: 0xff5c7a, count: 26 },
+    canopy: { color: 0xff2d55, emissive: 0xff1744, emissiveIntensity: 0.8, specular: 0xffa0b0, shininess: 40 },
+    dark: { color: 0x9c0d30, emissive: 0x5a0018, emissiveIntensity: 0.96, shininess: 20 },
+    accent: { color: 0xffb3c1, emissive: 0xff4d6d, emissiveIntensity: 1.92, shininess: 10 },
+    glow: 0xff1744,
   },
   willow: {
-    canopy: { color: 0xffc23a, emissive: 0xffa000, emissiveIntensity: 0.55, specular: 0xfff0b0, shininess: 35 },
-    dark: { color: 0xd47a16, emissive: 0x8a4600, emissiveIntensity: 0.5, shininess: 15 },
-    accent: { color: 0xfff6c8, emissive: 0xffe680, emissiveIntensity: 1.2, shininess: 10 },
-    glow: 0xffb300, particle: { kind: 'firefly', color: 0xfff1a0, count: 22 },
+    canopy: { color: 0xffc23a, emissive: 0xffa000, emissiveIntensity: 0.88, specular: 0xfff0b0, shininess: 35 },
+    dark: { color: 0xd47a16, emissive: 0x8a4600, emissiveIntensity: 0.8, shininess: 15 },
+    accent: { color: 0xfff6c8, emissive: 0xffe680, emissiveIntensity: 1.92, shininess: 10 },
+    glow: 0xffb300,
   },
   cypress: {
-    canopy: { color: 0x5ff5d5, emissive: 0x1de9b6, emissiveIntensity: 0.5, specular: 0xffffff, shininess: 140, transparent: true, opacity: 0.9 },
-    dark: { color: 0x14967f, emissive: 0x0b5e52, emissiveIntensity: 0.6, shininess: 80 },
-    accent: { color: 0xd8ffff, emissive: 0x7ffff0, emissiveIntensity: 0.9, specular: 0xffffff, shininess: 200, transparent: true, opacity: 0.85 },
-    glow: 0x1de9b6, particle: { kind: 'mote', color: 0xb6fff2, count: 26 },
+    canopy: { color: 0x5ff5d5, emissive: 0x1de9b6, emissiveIntensity: 0.8, specular: 0xffffff, shininess: 140, transparent: true, opacity: 0.9 },
+    dark: { color: 0x14967f, emissive: 0x0b5e52, emissiveIntensity: 0.96, shininess: 80 },
+    accent: { color: 0xd8ffff, emissive: 0x7ffff0, emissiveIntensity: 1.44, specular: 0xffffff, shininess: 200, transparent: true, opacity: 0.85 },
+    glow: 0x1de9b6,
   },
 };
-const speciesMat = (id, part) => once(`${id}-${part}`, () => phong(LOOKS[id][part]));
+// Bloom trees use the same palette with stronger self-illumination.
+const speciesMat = (id, part, bloom = false) => once(`${id}-${part}-${bloom}`, () => {
+  const def = LOOKS[id][part];
+  return phong(bloom ? { ...def, emissiveIntensity: (def.emissiveIntensity ?? 1) * 1.6 } : def);
+});
+const glowMat = (id, bloom) => once(`glow-${id}-${bloom}`, () => additive(LOOKS[id].glow, (bloom ? 0.42 : 0.26) * (LOOKS[id].glowScale ?? 1)));
 const MATS = {
   trunk: () => once('trunk', () => phong({ color: 0x4e3022, shininess: 4 })),
   bark: () => once('bark', () => phong({ color: 0x75492f, shininess: 6 })),
@@ -196,46 +201,6 @@ const builders = {
   },
 };
 
-// ---- Particles (CPU-animated points; fixed pixel size so they work with MapLibre's camera) ----
-function makeParticles(kind, color, count, top, r) {
-  const pos = new Float32Array(count * 3), vel = new Float32Array(count * 3);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
-    color, size: kind === 'leaf' ? 4 : 3.5, sizeAttenuation: false, transparent: true, opacity: 0.95,
-    blending: kind === 'leaf' ? THREE.NormalBlending : THREE.AdditiveBlending, depthWrite: false,
-  }));
-  pts.frustumCulled = false;
-  const spawn = (i, fresh) => {
-    const a = r() * Math.PI * 2, d = r();
-    let x, y, z, vx = 0, vy = 0, vz = 0;
-    if (kind === 'leaf') { x = Math.cos(a) * d * 7; z = Math.sin(a) * d * 7; y = 11 + r() * 7; vy = -(0.8 + r() * 0.8); vx = (r() - 0.5) * 0.8; vz = (r() - 0.5) * 0.8; }
-    else if (kind === 'ember') { x = Math.cos(a) * d * 5; z = Math.sin(a) * d * 5; y = 4 + r() * 10; vy = 1.2 + r() * 1.6; vx = (r() - 0.5) * 0.6; vz = (r() - 0.5) * 0.6; }
-    else if (kind === 'firefly') { x = Math.cos(a) * (3 + d * 6); z = Math.sin(a) * (3 + d * 6); y = 2 + r() * 12; vx = (r() - 0.5) * 2; vy = (r() - 0.5) * 1; vz = (r() - 0.5) * 2; }
-    else { x = Math.cos(a) * d * 6; z = Math.sin(a) * d * 6; y = 2 + r() * 12; vy = 0.7 + r() * 1.2; }
-    if (fresh && kind !== 'firefly') y = kind === 'leaf' ? r() * 18 : 2 + r() * (top - 2);
-    pos.set([x, y, z], i * 3); vel.set([vx, vy, vz], i * 3);
-  };
-  for (let i = 0; i < count; i++) spawn(i, true);
-  pts.userData.step = (dt, t) => {
-    for (let i = 0; i < count; i++) {
-      const o = i * 3;
-      if (kind === 'firefly') {
-        vel[o] += (r() - 0.5) * dt * 3; vel[o + 1] += (r() - 0.5) * dt * 2; vel[o + 2] += (r() - 0.5) * dt * 3;
-        for (let c = 0; c < 3; c++) vel[o + c] *= 0.98;
-      }
-      pos[o] += vel[o] * dt + (kind === 'leaf' ? Math.sin(t * 0.002 + i) * dt * 1.2 : 0);
-      pos[o + 1] += vel[o + 1] * dt;
-      pos[o + 2] += vel[o + 2] * dt;
-      const d = Math.hypot(pos[o], pos[o + 2]);
-      if ((kind === 'leaf' && pos[o + 1] < 0.3) || (kind !== 'leaf' && kind !== 'firefly' && pos[o + 1] > top + 4) ||
-          (kind === 'firefly' && (d > 11 || pos[o + 1] < 1 || pos[o + 1] > 16))) spawn(i, false);
-    }
-    geo.attributes.position.needsUpdate = true;
-  };
-  return pts;
-}
-
 export function buildTree(species, seed) {
   const id = species.id, r = rng(seed), P = new Parts(r);
   const info = builders[id](P, r);
@@ -263,25 +228,18 @@ export function buildTree(species, seed) {
   shadow.rotation.x = -Math.PI / 2; shadow.position.set(3, 0.05, 1.5); shadow.scale.set(1.35, 1, 1);
   g.add(shadow);
 
-  const look = LOOKS[id];
-  const ring = new THREE.Mesh(new THREE.RingGeometry(8.5, 10, 24), once('ring-' + id, () => additive(look.glow, 0.35, THREE.DoubleSide)));
-  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.12;
-  g.add(ring);
-
-  const glow = new THREE.Group();
-  glow.position.y = info.glowY;
-  glow.add(new THREE.Mesh(new THREE.IcosahedronGeometry(11, 2), once(`glowA-${id}`, () => additive(look.glow, 0.08, THREE.BackSide))));
-  glow.add(new THREE.Mesh(new THREE.IcosahedronGeometry(14.5, 2), once(`glowB-${id}`, () => additive(look.glow, 0.035, THREE.BackSide))));
-  g.add(glow);
-
-  const particles = makeParticles(look.particle.kind, look.particle.color, look.particle.count, info.top, r);
-  g.add(particles);
-
-  const sparkPos = new Float32Array(16 * 3);
-  for (let k = 0; k < 16; k++) { const a = r() * Math.PI * 2, d = 6 + r() * 5; sparkPos.set([Math.cos(a) * d, info.glowY - 6 + r() * 14, Math.sin(a) * d], k * 3); }
-  const sparkGeo = new THREE.BufferGeometry(); sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
-  const sparkles = new THREE.Points(sparkGeo, once('spark', () => new THREE.PointsMaterial({ color: 0xffffff, size: 3, sizeAttenuation: false, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false })));
-  g.add(sparkles);
+  // Glow shells hug each canopy mesh (pushed out along normals) so the tree itself glows, with no halo disc.
+  const look = LOOKS[id], shells = [];
+  for (const m of canopy) {
+    if (m.userData.part === 'dark') continue;
+    const geo = m.geometry.clone(), pos = geo.attributes.position, nrm = geo.attributes.normal;
+    for (let k = 0; k < pos.count; k++)
+      pos.setXYZ(k, pos.getX(k) + nrm.getX(k) * 0.35, pos.getY(k) + nrm.getY(k) * 0.35, pos.getZ(k) + nrm.getZ(k) * 0.35);
+    const sh = new THREE.Mesh(geo, glowMat(id, false));
+    sh.position.y = m.position.y;
+    crown.add(sh);
+    shells.push(sh);
+  }
 
   const bar = new THREE.Group();
   bar.position.set(0, 0.2, 12); bar.rotation.x = -Math.PI / 2;
@@ -291,7 +249,7 @@ export function buildTree(species, seed) {
   bar.add(fill);
   g.add(bar);
 
-  g.userData = { species, crown, canopy, glow, ring, particles, sparkles, fill, bar, state: null, phase: r() * 10, lastT: 0 };
+  g.userData = { species, crown, canopy, shells, fill, bar, state: null, phase: r() * 10, lastT: 0 };
   return g;
 }
 
@@ -308,13 +266,10 @@ export function applyTreeState(g, state, hydration) {
   for (const m of u.canopy) {
     const part = m.userData.part;
     if (part === 'accent') m.visible = !withered;
-    else m.material = withered ? (part === 'dark' ? MATS.witherDark() : MATS.wither()) : speciesMat(id, part);
+    else m.material = withered ? (part === 'dark' ? MATS.witherDark() : MATS.wither()) : speciesMat(id, part, state === 'bloom');
   }
   g.rotation.z = withered ? 0.06 : 0;
-  u.glow.visible = !withered && (id !== 'ironwood' || state === 'bloom');
-  u.ring.visible = !withered;
-  u.particles.visible = !withered;
-  u.sparkles.visible = state === 'bloom';
+  for (const sh of u.shells) { sh.visible = !withered; sh.material = glowMat(id, state === 'bloom'); }
 }
 
 export function animateTree(g, t) {
@@ -324,10 +279,6 @@ export function animateTree(g, t) {
   const amp = u.state === 'withered' ? 0.005 : 0.025;
   u.crown.rotation.z = Math.sin(t * 0.0011 + u.phase) * amp;
   u.crown.rotation.x = Math.cos(t * 0.0008 + u.phase) * amp * 0.6;
-  if (u.particles.visible) u.particles.userData.step(dt, t);
-  if (u.sparkles.visible) u.sparkles.rotation.y = t * 0.0004;
-  if (u.glow.visible) u.glow.scale.setScalar((u.state === 'bloom' ? 1.25 : 1) * (1 + Math.sin(t * 0.002 + u.phase) * 0.04));
-  if (u.ring.visible) u.ring.material.opacity = 0.25 + Math.sin(t * 0.003) * 0.1;
 }
 
 export function addLights(scene) {

@@ -33,5 +33,8 @@ Phones only allow GPS on **HTTPS**, so to play outdoors, host the folder on any 
 ## Art direction
 Tilted 3D map (MapLibre GL, pitch 68°) with a custom sunset low-poly style defined in `buildStyle()` in `game.js`
 (olive ground, dark roads, cream plot grid, warm extruded buildings, sunset sky). Trees are flat-shaded
-low-poly three.js models in `trees3d.js`, rendered through a MapLibre custom layer; Bloom adds a stronger glow + sparkles,
+low-poly three.js models in `trees3d.js`, rendered through a MapLibre custom layer; Trees glow through emissive materials and a thin glow shell that hugs each canopy (no particles or halo disc); Bloom glows brighter,
 Withered turns the canopy brown. Each plot shows a ground hydration bar.
+
+## Walking -> HE
+GPS distance counts when accuracy is ±50 m or better. When GPS is weaker (indoors, approximate location), the phone's motion-sensor step counter adds 0.762 m per step instead; the two never count at the same time.
