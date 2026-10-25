@@ -508,12 +508,23 @@ function simMove(fwd, right) {
   updateHud();
 }
 const DIRS = { up: [1, 0], down: [-1, 0], left: [0, -1], right: [0, 1] };
+// Only one d-pad repeat may run at a time; any release, extra button, or focus loss stops it.
+let padRepeat = null;
+const stopPad = () => { clearInterval(padRepeat); padRepeat = null; };
 document.querySelectorAll('#dpad button').forEach((b) => {
-  let rep = null;
   const go = () => { const [f, r] = DIRS[b.dataset.dir]; simMove(f * SIM_STEP_M, r * SIM_STEP_M); };
-  b.addEventListener('pointerdown', (e) => { e.preventDefault(); go(); rep = setInterval(go, 150); });
-  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => b.addEventListener(ev, () => clearInterval(rep)));
+  b.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    stopPad();
+    if (e.button !== 0) return;
+    go();
+    padRepeat = setInterval(go, 150);
+  });
+  b.addEventListener('pointerleave', stopPad);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
 });
+['pointerup', 'pointercancel', 'contextmenu', 'blur'].forEach((ev) => window.addEventListener(ev, stopPad));
+document.addEventListener('visibilitychange', stopPad);
 const KEYS = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
 map.keyboard.disable();
 window.addEventListener('keydown', (e) => {
